@@ -1,22 +1,23 @@
-import { createSphereVertices } from './geometry.js';
-
+import { createSphereVertices, createGrid } from './geometry.js';
+ 
 const canvas = document.getElementById('glCanvas');
 const gl = canvas.getContext('webgl2');
-
+ 
 if (!gl) {
   alert('WebGL2 non disponibile su questo browser. Prova con Chrome aggiornato.');
   throw new Error('WebGL2 non supportato');
 }
-
+ 
 const ATTRIB_POSITION = 0;
 const ATTRIB_NORMAL = 1;
-
+const ATTRIB_TEXCOORD = 2;
+ 
 async function loadShaderSource(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Impossibile caricare ${url} (${res.status})`);
   return res.text();
 }
-
+ 
 function compileShader(type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -28,16 +29,16 @@ function compileShader(type, source) {
   }
   return shader;
 }
-
+ 
 function createProgram(vertSource, fragSource) {
   const vertShader = compileShader(gl.VERTEX_SHADER, vertSource);
   const fragShader = compileShader(gl.FRAGMENT_SHADER, fragSource);
-
+ 
   const program = gl.createProgram();
   gl.attachShader(program, vertShader);
   gl.attachShader(program, fragShader);
   gl.linkProgram(program);
-
+ 
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
     const info = gl.getProgramInfoLog(program);
     throw new Error(`Errore link programma: ${info}`);
@@ -45,30 +46,154 @@ function createProgram(vertSource, fragSource) {
   return program;
 }
 
-function createSphereVAO(sphere) {
+function createVAO(mesh) {
   const vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
-
+ 
   const posBuffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
-  gl.bufferData(gl.ARRAY_BUFFER, sphere.position, gl.STATIC_DRAW);
+  gl.bufferData(gl.ARRAY_BUFFER, mesh.position, gl.STATIC_DRAW);
   gl.enableVertexAttribArray(ATTRIB_POSITION);
   gl.vertexAttribPointer(ATTRIB_POSITION, 3, gl.FLOAT, false, 0, 0);
-
+ 
   const normBuffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, normBuffer);
-  gl.bufferData(gl.ARRAY_BUFFER, sphere.normal, gl.STATIC_DRAW);
+  gl.bufferData(gl.ARRAY_BUFFER, mesh.normal, gl.STATIC_DRAW);
   gl.enableVertexAttribArray(ATTRIB_NORMAL);
   gl.vertexAttribPointer(ATTRIB_NORMAL, 3, gl.FLOAT, false, 0, 0);
-
+ 
   const idxBuffer = gl.createBuffer();
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuffer);
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sphere.indices, gl.STATIC_DRAW);
-
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+ 
   gl.bindVertexArray(null);
   return vao;
 }
+ 
 
+function createFloorVAO(mesh) {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+ 
+  const posBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, mesh.position, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(ATTRIB_POSITION);
+  gl.vertexAttribPointer(ATTRIB_POSITION, 3, gl.FLOAT, false, 0, 0);
+ 
+  const texBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, texBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, mesh.texcoord, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(ATTRIB_TEXCOORD);
+  gl.vertexAttribPointer(ATTRIB_TEXCOORD, 2, gl.FLOAT, false, 0, 0);
+ 
+  const idxBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuffer);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+ 
+  gl.bindVertexArray(null);
+  return vao;
+}
+ 
+
+function loadTexture(url) {
+  return new Promise((resolve, reject) => {
+    const texture = gl.createTexture();
+    const image = new Image();
+ 
+    image.onload = () => {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      resolve(texture);
+    };
+    image.onerror = () => reject(new Error(`Impossibile caricare la texture ${url}`));
+    image.src = url;
+  });
+}
+ 
+function degToRad(d) { return d * Math.PI / 180; }
+ 
+let THETA = degToRad(45);
+let PHI = degToRad(45);      
+let D = 20;                   
+ 
+const MIN_PHI = degToRad(10);
+const MAX_PHI = degToRad(80);
+const MIN_D = 5;
+const MAX_D = 60;
+ 
+const cameraTarget = [0, 0, 0];
+const cameraUp = [0, 1, 0];
+ 
+let dragging = false;
+let lastX = 0, lastY = 0;
+ 
+canvas.addEventListener('mousedown', (e) => {
+  dragging = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+});
+window.addEventListener('mouseup', () => { dragging = false; });
+window.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX;
+  const dy = e.clientY - lastY;
+  lastX = e.clientX;
+  lastY = e.clientY;
+ 
+  THETA -= dx * 0.005;
+  PHI -= dy * 0.005;
+  PHI = Math.min(MAX_PHI, Math.max(MIN_PHI, PHI));
+});
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  D += e.deltaY * 0.01;
+  D = Math.min(MAX_D, Math.max(MIN_D, D));
+}, { passive: false });
+ 
+function getCameraPosition() {
+  return [
+    D * Math.sin(PHI) * Math.cos(THETA),
+    D * Math.cos(PHI),
+    D * Math.sin(PHI) * Math.sin(THETA)
+  ];
+}
+
+const TEMP_keys = {};
+window.addEventListener('keydown', (e) => { TEMP_keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup', (e) => { TEMP_keys[e.key.toLowerCase()] = false; });
+ 
+const TEMP_spherePosition = { x: 0, z: 0 };
+const TEMP_SPEED = 4; 
+const TEMP_BOUND = 20; 
+ 
+function TEMP_updateSpherePosition(deltaTime) {
+  let forwardInput = 0, rightInput = 0;
+  if (TEMP_keys['w']) forwardInput += 1;
+  if (TEMP_keys['s']) forwardInput -= 1;
+  if (TEMP_keys['d']) rightInput += 1;
+  if (TEMP_keys['a']) rightInput -= 1;
+ 
+  const forward = [-Math.cos(THETA), 0, -Math.sin(THETA)];
+  const right = [Math.sin(THETA), 0, -Math.cos(THETA)];
+ 
+  const moveX = (forward[0] * forwardInput + right[0] * rightInput) * TEMP_SPEED * deltaTime;
+  const moveZ = (forward[2] * forwardInput + right[2] * rightInput) * TEMP_SPEED * deltaTime;
+ 
+  TEMP_spherePosition.x += moveX;
+  TEMP_spherePosition.z += moveZ;
+ 
+  TEMP_spherePosition.x = Math.min(TEMP_BOUND, Math.max(-TEMP_BOUND, TEMP_spherePosition.x));
+  TEMP_spherePosition.z = Math.min(TEMP_BOUND, Math.max(-TEMP_BOUND, TEMP_spherePosition.z));
+}
+ 
 function resizeCanvasToDisplaySize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const width = Math.round(canvas.clientWidth * dpr);
@@ -80,73 +205,99 @@ function resizeCanvasToDisplaySize() {
   }
   return false;
 }
-
+ 
 async function main() {
-  const [vertSource, fragSource] = await Promise.all([
+  const [vertSource, fragSource, floorVertSource, floorFragSource, sandTexture] = await Promise.all([
     loadShaderSource('shaders/basic.vert.glsl'),
-    loadShaderSource('shaders/basic.frag.glsl')
+    loadShaderSource('shaders/basic.frag.glsl'),
+    loadShaderSource('shaders/seafloor.vert.glsl'),
+    loadShaderSource('shaders/seafloor.frag.glsl'),
+    loadTexture('js/resources/images/color.jpg')
   ]);
-
+ 
   const program = createProgram(vertSource, fragSource);
-
+  const floorProgram = createProgram(floorVertSource, floorFragSource);
+ 
   const sphere = createSphereVertices();
-  const vao = createSphereVAO(sphere);
-  const indexCount = sphere.indices.length;
-
+  const sphereVAO = createVAO(sphere);
+  const sphereIndexCount = sphere.indices.length;
+ 
+  const floor = createGrid(50, 50, 10);
+  const floorVAO = createFloorVAO(floor);
+  const floorIndexCount = floor.indices.length;
+  const floorModelMatrix = m4.translate(m4.identity(), 0, -2, 0);
+ 
+  const floorUProjectionLoc = gl.getUniformLocation(floorProgram, 'uProjectionMatrix');
+  const floorUViewLoc = gl.getUniformLocation(floorProgram, 'uViewMatrix');
+  const floorUModelLoc = gl.getUniformLocation(floorProgram, 'uModelMatrix');
+  const floorUTextureLoc = gl.getUniformLocation(floorProgram, 'uSandTexture');
+  const floorUFogColorLoc = gl.getUniformLocation(floorProgram, 'uFogColor');
+  const floorUFogDensityLoc = gl.getUniformLocation(floorProgram, 'uFogDensity');
+ 
   const uProjectionLoc = gl.getUniformLocation(program, 'uProjectionMatrix');
   const uViewLoc = gl.getUniformLocation(program, 'uViewMatrix');
   const uModelLoc = gl.getUniformLocation(program, 'uModelMatrix');
   const uColorLoc = gl.getUniformLocation(program, 'uColor');
-
-  const camera = new Camera(Camera.ORBITING_TYPE);
-  camera.setPosition([0, 0, 5]);
-  camera.setElevation(15); // leggermente dall'alto, non perfettamente frontale
-  camera.fov = 45;   // gradi
-  camera.minZ = 0.1;
-  camera.maxZ = 100;
-  const controls = new Controls(camera, canvas);
-
-  gl.clearColor(0.0, 0.0, 0.0, 1.0);
+ 
+  gl.clearColor(0.0, 0.15, 0.25, 1.0);
   gl.enable(gl.DEPTH_TEST);
-
+ 
+  let TEMP_lastTimeSec = 0;
+ 
   function render(timeMs) {
     const timeSec = timeMs * 0.001;
-
+    const deltaTime = TEMP_lastTimeSec ? timeSec - TEMP_lastTimeSec : 0;
+    TEMP_lastTimeSec = timeSec;
+    TEMP_updateSpherePosition(deltaTime);
+ 
     if (resizeCanvasToDisplaySize()) {
       gl.viewport(0, 0, canvas.width, canvas.height);
     }
-
+ 
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
+ 
     const aspect = canvas.width / canvas.height;
-    // camera.fov è in gradi (convenzione di Camera.js): lo convertiamo in
-    // radianti per m4.perspective, che li vuole in radianti.
-    const projectionMatrix = m4.perspective(camera.fov * Math.PI / 180, aspect, camera.minZ, camera.maxZ);
-
-    // getViewTransform() di Camera.js restituisce già la view matrix (fa
-    // l'inversione internamente) — a differenza di m4.lookAt(), qui non
-    // serve invertirla di nuovo.
-    const viewMatrix = camera.getViewTransform();
-
+    const projectionMatrix = m4.perspective(degToRad(45), aspect, 0.1, 100);
+ 
+    const cameraMatrix = m4.lookAt(getCameraPosition(), cameraTarget, cameraUp);
+    const viewMatrix = m4.inverse(cameraMatrix);
+ 
     let modelMatrix = m4.identity();
+    modelMatrix = m4.translate(modelMatrix, TEMP_spherePosition.x, 0, TEMP_spherePosition.z);
     modelMatrix = m4.yRotate(modelMatrix, timeSec * 0.5);
-
+ 
     gl.useProgram(program);
     gl.uniformMatrix4fv(uProjectionLoc, false, projectionMatrix);
     gl.uniformMatrix4fv(uViewLoc, false, viewMatrix);
+ 
+    // Sfera
     gl.uniformMatrix4fv(uModelLoc, false, modelMatrix);
     gl.uniform3fv(uColorLoc, [0.2, 0.6, 0.9]);
-
-    gl.bindVertexArray(vao);
-    gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_SHORT, 0);
+    gl.bindVertexArray(sphereVAO);
+    gl.drawElements(gl.TRIANGLES, sphereIndexCount, gl.UNSIGNED_SHORT, 0);
     gl.bindVertexArray(null);
-
+ 
+    gl.useProgram(floorProgram);
+    gl.uniformMatrix4fv(floorUProjectionLoc, false, projectionMatrix);
+    gl.uniformMatrix4fv(floorUViewLoc, false, viewMatrix);
+    gl.uniformMatrix4fv(floorUModelLoc, false, floorModelMatrix);
+ 
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sandTexture);
+    gl.uniform1i(floorUTextureLoc, 0);
+    gl.uniform3fv(floorUFogColorLoc, [0.0, 0.15, 0.25]);
+    gl.uniform1f(floorUFogDensityLoc, 0.03);
+ 
+    gl.bindVertexArray(floorVAO);
+    gl.drawElements(gl.TRIANGLES, floorIndexCount, gl.UNSIGNED_SHORT, 0);
+    gl.bindVertexArray(null);
+ 
     requestAnimationFrame(render);
   }
-
+ 
   requestAnimationFrame(render);
 }
-
+ 
 main().catch(err => {
   console.error(err);
   alert(`Errore di inizializzazione: ${err.message}`);

@@ -1,5 +1,3 @@
-
-
 export function createSphereVertices() {
   var radius = 1;
   var subdivisionsAxis = 32;
@@ -63,6 +61,52 @@ export function createSphereVertices() {
         (y + 1) * numVertsAround + x,
         (y + 0) * numVertsAround + x + 1,
         (y + 1) * numVertsAround + x + 1);
+    }
+  }
+
+  return {
+    position: positions,
+    normal: normals,
+    texcoord: texCoords,
+    indices: indices,
+  };
+}
+
+
+export function createGrid(size = 50, divisions = 50, textureRepeat = 10) {
+  const numVertsPerSide = divisions + 1;
+  const numVertices = numVertsPerSide * numVertsPerSide;
+
+  const positions = webglUtils.createAugmentedTypedArray(3, numVertices);
+  const normals = webglUtils.createAugmentedTypedArray(3, numVertices);
+  const texCoords = webglUtils.createAugmentedTypedArray(2, numVertices);
+
+  const half = size / 2;
+
+  for (let j = 0; j <= divisions; j++) {
+    for (let i = 0; i <= divisions; i++) {
+      const u = i / divisions;
+      const v = j / divisions;
+
+      const x = -half + u * size;
+      const z = -half + v * size;
+
+      positions.push(x, 0, z);
+      normals.push(0, 1, 0); // piano orizzontale: normale sempre verso l'alto
+      texCoords.push(u * textureRepeat, v * textureRepeat); // >1: la texture si ripeterà (gl.REPEAT)
+    }
+  }
+
+  // Stessa identica struttura a due triangoli per quad usata in
+  // createSphereVertices(), solo con numVertsPerSide al posto di numVertsAround.
+  const indices = webglUtils.createAugmentedTypedArray(3, divisions * divisions * 2, Uint16Array);
+  for (let j = 0; j < divisions; j++) {
+    for (let i = 0; i < divisions; i++) {
+      const first = j * numVertsPerSide + i;
+      const second = first + numVertsPerSide;
+
+      indices.push(first, second, first + 1);
+      indices.push(second, second + 1, first + 1);
     }
   }
 
