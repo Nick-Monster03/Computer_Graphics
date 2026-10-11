@@ -205,44 +205,69 @@ function getCameraPosition() {
   ];
 }
 
-const TEMP_keys = {};
-window.addEventListener('keydown', (e) => { TEMP_keys[e.key.toLowerCase()] = true; });
-window.addEventListener('keyup', (e) => { TEMP_keys[e.key.toLowerCase()] = false; });
- 
-const TEMP_spherePosition = { x: 0, z: 0 };
-const TEMP_SPEED = 4; 
-const TEMP_BOUND = 20; 
- 
-function TEMP_updateSpherePosition(deltaTime) {
-  let forwardInput = 0, rightInput = 0;
-  if (TEMP_keys['w']) forwardInput += 1;
-  if (TEMP_keys['s']) forwardInput -= 1;
-  if (TEMP_keys['d']) rightInput += 1;
-  if (TEMP_keys['a']) rightInput -= 1;
- 
-  const forward = [-Math.cos(THETA), 0, -Math.sin(THETA)];
-  const right = [Math.sin(THETA), 0, -Math.cos(THETA)];
- 
-  const moveX = (forward[0] * forwardInput + right[0] * rightInput) * TEMP_SPEED * deltaTime;
-  const moveZ = (forward[2] * forwardInput + right[2] * rightInput) * TEMP_SPEED * deltaTime;
- 
-  TEMP_spherePosition.x += moveX;
-  TEMP_spherePosition.z += moveZ;
- 
-  TEMP_spherePosition.x = Math.min(TEMP_BOUND, Math.max(-TEMP_BOUND, TEMP_spherePosition.x));
-  TEMP_spherePosition.z = Math.min(TEMP_BOUND, Math.max(-TEMP_BOUND, TEMP_spherePosition.z));
+const keys = {};
+window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+//FISICA DEL SOTTOMARINO
+let px, pz;         // posizione
+let vx, vz;         // velocita' attuale (unita' per passo)
+let mozzoElica;     // angolo dell'elica (gradi)
+
+let accMax, attrito, raggioElica;
+const BOUND = 20;   // limite dell'area di movimento
+
+function SubInit() {
+  px = pz = 0;
+  vx = vz = 0;
+  mozzoElica = 0;
+
+  accMax = 0.0011;  
+
+  // attrito: percentuale di velocita' che viene mantenuta a ogni passo
+  // 1 = no attrito
+  // <<1 = attrito grande
+  attrito = 0.995;  
+
+  // Nota: vel max = accMax*attrito / (1-attrito)  (~0.12 unita'/passo = ~7 unita'/s)
+
+  raggioElica = 0.5; // "raggio" usato nella formula del mozzo: piu' piccolo = elica piu' veloce
 }
 
-//rotazione dell'elica
-let propAngle = 0;          
-let propSpeed = 0;          
-const PROP_MAX_SPEED = 15;  //velocità di rotazione (rad/s)
-const PROP_RESPONSE = 3;    
+// SubDoStep: (a delta-t costante)
 
-function updatePropeller(deltaTime, isMoving) {
-  const target = isMoving ? PROP_MAX_SPEED : 0;
-  propSpeed += (target - propSpeed) * Math.min(1, PROP_RESPONSE * deltaTime);
-  propAngle = (propAngle + propSpeed * deltaTime) % (2 * Math.PI);
+function SubDoStep() {
+  let forwardInput = 0, rightInput = 0;
+  if (keys['w']) forwardInput += 1;
+  if (keys['s']) forwardInput -= 1;
+  if (keys['d']) rightInput += 1;
+  if (keys['a']) rightInput -= 1;
+
+  const forward = [-Math.cos(THETA), 0, -Math.sin(THETA)];
+  const right = [Math.sin(THETA), 0, -Math.cos(THETA)];
+
+  // accelerazione
+  vx += (forward[0] * forwardInput + right[0] * rightInput) * accMax;
+  vz += (forward[2] * forwardInput + right[2] * rightInput) * accMax;
+
+  // attriti (semplificando): l'acqua frena il sottomarino
+  vx *= attrito;
+  vz *= attrito;
+
+  // rotazione elica: con l'attrito la velocita' cala piano pianoe quindi anche l'elica rallenta piano piano
+  const v = Math.hypot(vx, vz);
+  const da = (180.0 * v) / (Math.PI * raggioElica); 
+  mozzoElica += da;
+
+  // posizione = posizione + velocita * delta t (ma e' delta t costante)
+  px += vx;
+  pz += vz;
+
+  // bordi dell'area: se tocca il bordo si ferma su quell'asse
+  if (px > BOUND) { px = BOUND; vx = 0; }
+  if (px < -BOUND) { px = -BOUND; vx = 0; }
+  if (pz > BOUND) { pz = BOUND; vz = 0; }
+  if (pz < -BOUND) { pz = -BOUND; vz = 0; }
 }
  
 function resizeCanvasToDisplaySize() {
@@ -292,20 +317,27 @@ async function main() {
  
   gl.clearColor(0.0, 0.15, 0.25, 1.0);
   gl.enable(gl.DEPTH_TEST);
- 
-  let TEMP_lastTimeSec = 0;
+
+  SubInit();
+
+  // metodo basato sul tempo della fisica (come update() del prof)
+  let lastTime = 0;
+  let accumulator = 0;
+  const deltaTimeFisica = 1/60; // 60 aggiornamenti al secondo
  
   function render(timeMs) {
-    const timeSec = timeMs * 0.001;
-    const deltaTime = TEMP_lastTimeSec ? timeSec - TEMP_lastTimeSec : 0;
-    TEMP_lastTimeSec = timeSec;
+    const currentTime = timeMs * 0.001;
+    let frameTime = lastTime ? currentTime - lastTime : 0;
+    lastTime = currentTime;
+    frameTime = Math.min(frameTime, 0.25);
 
-    const prevX = TEMP_spherePosition.x;
-    const prevZ = TEMP_spherePosition.z;
-    TEMP_updateSpherePosition(deltaTime);
-    const isMoving = Math.hypot(TEMP_spherePosition.x - prevX,
-                                TEMP_spherePosition.z - prevZ) > 1e-6;
-    updatePropeller(deltaTime, isMoving);
+    accumulator += frameTime;
+
+    // Esegui la fisica a passi fissi
+    while (accumulator >= deltaTimeFisica) {
+      SubDoStep();
+      accumulator -= deltaTimeFisica;
+    }
  
     if (resizeCanvasToDisplaySize()) {
       gl.viewport(0, 0, canvas.width, canvas.height);
@@ -320,18 +352,20 @@ async function main() {
     const viewMatrix = m4.inverse(cameraMatrix);
  
     let modelMatrix = m4.identity();
-    modelMatrix = m4.translate(modelMatrix, TEMP_spherePosition.x, 0, TEMP_spherePosition.z);
+    modelMatrix = m4.translate(modelMatrix, px, 0, pz);
  
     gl.useProgram(program);
     gl.uniformMatrix4fv(uProjectionLoc, false, projectionMatrix);
     gl.uniformMatrix4fv(uViewLoc, false, viewMatrix);
  
+    // scafo
     gl.uniformMatrix4fv(uModelLoc, false, modelMatrix);
     gl.uniform3fv(uColorLoc, [0.2, 0.6, 0.9]);
     gl.bindVertexArray(sub.vao);
     gl.drawElements(gl.TRIANGLES, sub.count, sub.indexType, 0);
 
-    const propModelMatrix = m4.zRotate(modelMatrix, propAngle);
+    // elica: matrice dello scafo + rotazione
+    const propModelMatrix = m4.zRotate(modelMatrix, degToRad(mozzoElica));
     gl.uniformMatrix4fv(uModelLoc, false, propModelMatrix);
     gl.uniform3fv(uColorLoc, [0.7, 0.55, 0.3]); 
     gl.bindVertexArray(prop.vao);
