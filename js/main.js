@@ -117,6 +117,45 @@ function loadTexture(url) {
     image.src = url;
   });
 }
+
+
+async function loadObjMesh(url) {
+  window.positions = [];
+  window.normals = [];
+  window.texcoords = [];
+  await LoadMesh(gl, { sourceMesh: url, noUnitize: true});
+
+  const vertexCount = positions.length / 3;
+  const IndexArray = vertexCount > 65535 ? Uint32Array : Uint16Array;
+
+  const mesh = {
+    position: new Float32Array(positions),
+    normal: new Float32Array(normals),
+    texcoord: new Float32Array(texcoords),
+    indices: IndexArray.from({ length: vertexCount }, (_, i) => i),
+  };
+
+  logBounds(url, mesh.position);
+
+  return {
+    vao: createVAO(mesh),
+    count: mesh.indices.length,
+    indexType: IndexArray === Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
+  };
+}
+
+function logBounds(name, pos) {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < pos.length; i += 3) {
+    for (let k = 0; k < 3; k++) {
+      min[k] = Math.min(min[k], pos[i + k]);
+      max[k] = Math.max(max[k], pos[i + k]);
+    }
+  }
+  console.log(`${name}: ${pos.length / 3} vertici`,
+    'min', min.map(v => v.toFixed(2)), 'max', max.map(v => v.toFixed(2)));
+}
  
 function degToRad(d) { return d * Math.PI / 180; }
  
@@ -193,6 +232,18 @@ function TEMP_updateSpherePosition(deltaTime) {
   TEMP_spherePosition.x = Math.min(TEMP_BOUND, Math.max(-TEMP_BOUND, TEMP_spherePosition.x));
   TEMP_spherePosition.z = Math.min(TEMP_BOUND, Math.max(-TEMP_BOUND, TEMP_spherePosition.z));
 }
+
+//rotazione dell'elica
+let propAngle = 0;          
+let propSpeed = 0;          
+const PROP_MAX_SPEED = 15;  //velocità di rotazione (rad/s)
+const PROP_RESPONSE = 3;    
+
+function updatePropeller(deltaTime, isMoving) {
+  const target = isMoving ? PROP_MAX_SPEED : 0;
+  propSpeed += (target - propSpeed) * Math.min(1, PROP_RESPONSE * deltaTime);
+  propAngle = (propAngle + propSpeed * deltaTime) % (2 * Math.PI);
+}
  
 function resizeCanvasToDisplaySize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -218,10 +269,10 @@ async function main() {
   const program = createProgram(vertSource, fragSource);
   const floorProgram = createProgram(floorVertSource, floorFragSource);
  
-  const sphere = createSphereVertices();
-  const sphereVAO = createVAO(sphere);
-  const sphereIndexCount = sphere.indices.length;
  
+  const sub = await loadObjMesh('models/sottomarino_bozza.obj');
+  const prop = await loadObjMesh('models/elica.obj');
+
   const floor = createGrid(50, 50, 10);
   const floorVAO = createFloorVAO(floor);
   const floorIndexCount = floor.indices.length;
@@ -248,7 +299,13 @@ async function main() {
     const timeSec = timeMs * 0.001;
     const deltaTime = TEMP_lastTimeSec ? timeSec - TEMP_lastTimeSec : 0;
     TEMP_lastTimeSec = timeSec;
+
+    const prevX = TEMP_spherePosition.x;
+    const prevZ = TEMP_spherePosition.z;
     TEMP_updateSpherePosition(deltaTime);
+    const isMoving = Math.hypot(TEMP_spherePosition.x - prevX,
+                                TEMP_spherePosition.z - prevZ) > 1e-6;
+    updatePropeller(deltaTime, isMoving);
  
     if (resizeCanvasToDisplaySize()) {
       gl.viewport(0, 0, canvas.width, canvas.height);
@@ -264,17 +321,21 @@ async function main() {
  
     let modelMatrix = m4.identity();
     modelMatrix = m4.translate(modelMatrix, TEMP_spherePosition.x, 0, TEMP_spherePosition.z);
-    modelMatrix = m4.yRotate(modelMatrix, timeSec * 0.5);
  
     gl.useProgram(program);
     gl.uniformMatrix4fv(uProjectionLoc, false, projectionMatrix);
     gl.uniformMatrix4fv(uViewLoc, false, viewMatrix);
  
-    // Sfera
     gl.uniformMatrix4fv(uModelLoc, false, modelMatrix);
     gl.uniform3fv(uColorLoc, [0.2, 0.6, 0.9]);
-    gl.bindVertexArray(sphereVAO);
-    gl.drawElements(gl.TRIANGLES, sphereIndexCount, gl.UNSIGNED_SHORT, 0);
+    gl.bindVertexArray(sub.vao);
+    gl.drawElements(gl.TRIANGLES, sub.count, sub.indexType, 0);
+
+    const propModelMatrix = m4.zRotate(modelMatrix, propAngle);
+    gl.uniformMatrix4fv(uModelLoc, false, propModelMatrix);
+    gl.uniform3fv(uColorLoc, [0.7, 0.55, 0.3]); 
+    gl.bindVertexArray(prop.vao);
+    gl.drawElements(gl.TRIANGLES, prop.count, prop.indexType, 0);
     gl.bindVertexArray(null);
  
     gl.useProgram(floorProgram);
