@@ -135,16 +135,19 @@ async function loadObjMesh(url) {
     indices: IndexArray.from({ length: vertexCount }, (_, i) => i),
   };
 
-  logBounds(url, mesh.position);
+  const bounds = computeBounds(url, mesh.position);
 
   return {
     vao: createVAO(mesh),
     count: mesh.indices.length,
     indexType: IndexArray === Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
+    min: bounds.min,   // bounding box: serve per non far entrare il sub nella sabbia
+    max: bounds.max,
   };
 }
 
-function logBounds(name, pos) {
+// calcola (e stampa in console) il bounding box di una mesh
+function computeBounds(name, pos) {
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < pos.length; i += 3) {
@@ -155,10 +158,12 @@ function logBounds(name, pos) {
   }
   console.log(`${name}: ${pos.length / 3} vertici`,
     'min', min.map(v => v.toFixed(2)), 'max', max.map(v => v.toFixed(2)));
+  return { min, max };
 }
  
 function degToRad(d) { return d * Math.PI / 180; }
- 
+
+
 let THETA = degToRad(45);
 let PHI = degToRad(45);      
 let D = 20;                   
@@ -205,70 +210,119 @@ function getCameraPosition() {
   ];
 }
 
-const keys = {};
-window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
-window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
-//FISICA DEL SOTTOMARINO
-let px, pz;         // posizione
-let vx, vz;         // velocita' attuale (unita' per passo)
-let mozzoElica;     // angolo dell'elica (gradi)
 
-let accMax, attrito, raggioElica;
-const BOUND = 20;   // limite dell'area di movimento
+let px, py, pz, facing;  // posizione e orientamento
+let mozzoElica, sterzo;  // stato interno
+let vx, vy, vz;          // velocita' attuale
 
+let velSterzo, velRitornoSterzo, accMax, accVert,
+    raggioElica, grip,
+    attritoX, attritoY, attritoZ; // attriti
+let key;
+
+const BOUND = 20;        
+const FLOOR_Y = -2;      
+const CEILING_Y = 10;    
+let pyMin, pyMax;        
 function SubInit() {
-  px = pz = 0;
-  vx = vz = 0;
-  mozzoElica = 0;
+  px = py = pz = facing = 0; // posizione e orientamento
+  mozzoElica = sterzo = 0;   // stato
+  vx = vy = vz = 0;          // velocita' attuale
+  key = [false, false, false, false, false, false];
 
-  accMax = 0.0011;  
+  velSterzo = 3.4;          
+  velRitornoSterzo = 0.93;  
 
-  // attrito: percentuale di velocita' che viene mantenuta a ogni passo
-  // 1 = no attrito
-  // <<1 = attrito grande
-  attrito = 0.995;  
+  accMax = 0.0011;         
+  accVert = 0.0005;         
+  attritoZ = 0.995;  
+  attritoX = 0.8;    
+  attritoY = 0.995;  
 
-  // Nota: vel max = accMax*attrito / (1-attrito)  (~0.12 unita'/passo = ~7 unita'/s)
+  // Nota: vel max = accMax*attritoZ / (1-attritoZ)  (~0.22 unita'/passo = ~13 unita'/s)
 
-  raggioElica = 0.5; // "raggio" usato nella formula del mozzo: piu' piccolo = elica piu' veloce
+  raggioElica = 0.5; 
+
+  grip = 0.1; 
 }
 
-// SubDoStep: (a delta-t costante)
+
+function SubSetLimits(meshes) {
+  const minY = Math.min(...meshes.map(m => m.min[1]));
+  const maxY = Math.max(...meshes.map(m => m.max[1]));
+  pyMin = FLOOR_Y - minY;
+  pyMax = CEILING_Y - maxY;
+  py = Math.max(py, pyMin);   
+}
 
 function SubDoStep() {
-  let forwardInput = 0, rightInput = 0;
-  if (keys['w']) forwardInput += 1;
-  if (keys['s']) forwardInput -= 1;
-  if (keys['d']) rightInput += 1;
-  if (keys['a']) rightInput -= 1;
 
-  const forward = [-Math.cos(THETA), 0, -Math.sin(THETA)];
-  const right = [Math.sin(THETA), 0, -Math.cos(THETA)];
+  let vxm, vym, vzm; // velocita' in spazio sottomarino
 
-  // accelerazione
-  vx += (forward[0] * forwardInput + right[0] * rightInput) * accMax;
-  vz += (forward[2] * forwardInput + right[2] * rightInput) * accMax;
+  const cosf = Math.cos(facing * Math.PI / 180.0);
+  const sinf = Math.sin(facing * Math.PI / 180.0);
+  vxm = +cosf * vx - sinf * vz;
+  vym = vy;
+  vzm = +sinf * vx + cosf * vz;
 
-  // attriti (semplificando): l'acqua frena il sottomarino
-  vx *= attrito;
-  vz *= attrito;
+  // gestione dello sterzo
+  if (key[1]) sterzo += velSterzo;
+  if (key[3]) sterzo -= velSterzo;
+  sterzo *= velRitornoSterzo; // ritorno a timone fermo
 
-  // rotazione elica: con l'attrito la velocita' cala piano pianoe quindi anche l'elica rallenta piano piano
-  const v = Math.hypot(vx, vz);
-  const da = (180.0 * v) / (Math.PI * raggioElica); 
+  if (key[0]) vzm -= accMax;  // accelerazione in avanti
+  if (key[2]) vzm += accMax;  // accelerazione indietro
+  if (key[4]) vym += accVert; // salita
+  if (key[5]) vym -= accVert; // discesa
+
+  vxm *= attritoX;
+  vym *= attritoY;
+  vzm *= attritoZ;
+
+  facing = facing - (vzm * grip) * sterzo;
+
+  const da = (180.0 * vzm) / (Math.PI * raggioElica); // delta angolo
   mozzoElica += da;
 
-  // posizione = posizione + velocita * delta t (ma e' delta t costante)
+  vx = +cosf * vxm + sinf * vzm;
+  vy = vym;
+  vz = -sinf * vxm + cosf * vzm;
+
   px += vx;
+  py += vy;
   pz += vz;
 
-  // bordi dell'area: se tocca il bordo si ferma su quell'asse
-  if (px > BOUND) { px = BOUND; vx = 0; }
+
+  if (px >  BOUND) { px =  BOUND; vx = 0; }
   if (px < -BOUND) { px = -BOUND; vx = 0; }
-  if (pz > BOUND) { pz = BOUND; vz = 0; }
+  if (pz >  BOUND) { pz =  BOUND; vz = 0; }
   if (pz < -BOUND) { pz = -BOUND; vz = 0; }
+  if (py < pyMin)  { py = pyMin;  vy = 0; } // non attraversa la sabbia
+  if (py > pyMax)  { py = pyMax;  vy = 0; } // non esce verso l'alto
 }
+
+
+
+function doKeyDown(e) {
+  if (e.keyCode == 87) key[0] = true; // W
+  if (e.keyCode == 65) key[1] = true; // A
+  if (e.keyCode == 83) key[2] = true; // S
+  if (e.keyCode == 68) key[3] = true; // D
+  if (e.keyCode == 38) { key[4] = true; e.preventDefault(); } // freccia su
+  if (e.keyCode == 40) { key[5] = true; e.preventDefault(); } // freccia giu'
+}
+function doKeyUp(e) {
+  if (e.keyCode == 87) key[0] = false; // W
+  if (e.keyCode == 65) key[1] = false; // A
+  if (e.keyCode == 83) key[2] = false; // S
+  if (e.keyCode == 68) key[3] = false; // D
+  if (e.keyCode == 38) key[4] = false; // freccia su
+  if (e.keyCode == 40) key[5] = false; // freccia giu'
+}
+window.addEventListener('keydown', doKeyDown, true);
+window.addEventListener('keyup', doKeyUp, true);
+
  
 function resizeCanvasToDisplaySize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -294,14 +348,13 @@ async function main() {
   const program = createProgram(vertSource, fragSource);
   const floorProgram = createProgram(floorVertSource, floorFragSource);
  
- 
-  const sub = await loadObjMesh('models/sottomarino_bozza.obj');
+  const sub = await loadObjMesh('models/sottomarino.obj');
   const prop = await loadObjMesh('models/elica.obj');
 
   const floor = createGrid(50, 50, 10);
   const floorVAO = createFloorVAO(floor);
   const floorIndexCount = floor.indices.length;
-  const floorModelMatrix = m4.translate(m4.identity(), 0, -2, 0);
+  const floorModelMatrix = m4.translate(m4.identity(), 0, FLOOR_Y, 0);
  
   const floorUProjectionLoc = gl.getUniformLocation(floorProgram, 'uProjectionMatrix');
   const floorUViewLoc = gl.getUniformLocation(floorProgram, 'uViewMatrix');
@@ -319,17 +372,17 @@ async function main() {
   gl.enable(gl.DEPTH_TEST);
 
   SubInit();
+  SubSetLimits([sub, prop]);
 
-  // metodo basato sul tempo della fisica (come update() del prof)
   let lastTime = 0;
   let accumulator = 0;
-  const deltaTimeFisica = 1/60; // 60 aggiornamenti al secondo
+  const deltaTimeFisica = 1/60; 
  
   function render(timeMs) {
     const currentTime = timeMs * 0.001;
     let frameTime = lastTime ? currentTime - lastTime : 0;
     lastTime = currentTime;
-    frameTime = Math.min(frameTime, 0.25);
+    frameTime = Math.min(frameTime, 0.25); // evita "salti" al rientro da un'altra scheda
 
     accumulator += frameTime;
 
@@ -351,27 +404,26 @@ async function main() {
     const cameraMatrix = m4.lookAt(getCameraPosition(), cameraTarget, cameraUp);
     const viewMatrix = m4.inverse(cameraMatrix);
  
-    let modelMatrix = m4.identity();
-    modelMatrix = m4.translate(modelMatrix, px, 0, pz);
- 
     gl.useProgram(program);
     gl.uniformMatrix4fv(uProjectionLoc, false, projectionMatrix);
     gl.uniformMatrix4fv(uViewLoc, false, viewMatrix);
- 
-    // scafo
+
+    let modelMatrix = m4.identity();
+    modelMatrix = m4.translate(modelMatrix, px, py, pz);
+    modelMatrix = m4.yRotate(modelMatrix, degToRad(facing));
+
     gl.uniformMatrix4fv(uModelLoc, false, modelMatrix);
     gl.uniform3fv(uColorLoc, [0.2, 0.6, 0.9]);
     gl.bindVertexArray(sub.vao);
     gl.drawElements(gl.TRIANGLES, sub.count, sub.indexType, 0);
 
-    // elica: matrice dello scafo + rotazione
     const propModelMatrix = m4.zRotate(modelMatrix, degToRad(mozzoElica));
     gl.uniformMatrix4fv(uModelLoc, false, propModelMatrix);
     gl.uniform3fv(uColorLoc, [0.7, 0.55, 0.3]); 
     gl.bindVertexArray(prop.vao);
     gl.drawElements(gl.TRIANGLES, prop.count, prop.indexType, 0);
     gl.bindVertexArray(null);
- 
+
     gl.useProgram(floorProgram);
     gl.uniformMatrix4fv(floorUProjectionLoc, false, projectionMatrix);
     gl.uniformMatrix4fv(floorUViewLoc, false, viewMatrix);
