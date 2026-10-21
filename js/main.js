@@ -81,6 +81,12 @@ function createFloorVAO(mesh) {
   gl.enableVertexAttribArray(ATTRIB_POSITION);
   gl.vertexAttribPointer(ATTRIB_POSITION, 3, gl.FLOAT, false, 0, 0);
  
+  const normBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, normBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, mesh.normal, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(ATTRIB_NORMAL);
+  gl.vertexAttribPointer(ATTRIB_NORMAL, 3, gl.FLOAT, false, 0, 0);
+
   const texBuffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, texBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, mesh.texcoord, gl.STATIC_DRAW);
@@ -125,6 +131,13 @@ async function loadObjMesh(url) {
   window.texcoords = [];
   await LoadMesh(gl, { sourceMesh: url, noUnitize: true});
 
+  const material = {
+    diffuse:   window.diffuse,    // Kd
+    specular:  window.specular,   // Ks
+    shininess: window.shininess,  // Ns
+  };
+  console.log(url, 'materiale', material);
+
   const vertexCount = positions.length / 3;
   const IndexArray = vertexCount > 65535 ? Uint32Array : Uint16Array;
 
@@ -141,8 +154,9 @@ async function loadObjMesh(url) {
     vao: createVAO(mesh),
     count: mesh.indices.length,
     indexType: IndexArray === Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
-    min: bounds.min,   // bounding box: serve per non far entrare il sub nella sabbia
+    min: bounds.min,   
     max: bounds.max,
+    material,         
   };
 }
 
@@ -210,7 +224,42 @@ function getCameraPosition() {
   ];
 }
 
+const FOG_COLOR     = [0.0, 0.15, 0.25];   
+const LIGHT_COLOR   = [0.85, 0.95, 1.0];   
+const AMBIENT_COLOR = [0.4, 0.6, 0.75];    
 
+const lightControls = {
+  elevazione: 54,         
+  azimut: 111,             
+  intensita: 0.6,
+  ambiente: 0.71,
+  densitaNebbia: 0.048,
+};
+
+dat.GUI.TEXT_CLOSED = 'Nascondi pannello';
+dat.GUI.TEXT_OPEN   = 'Mostra pannello';
+
+const gui = new dat.GUI({ width: 320 });
+const lightFolder = gui.addFolder('Luce del sole');
+lightFolder.add(lightControls, 'elevazione', 5, 90).name('Altezza sull\'orizzonte (°)');
+lightFolder.add(lightControls, 'azimut', 0, 360).name('Direzione (°)');
+lightFolder.add(lightControls, 'intensita', 0, 2).name('Intensità');
+lightFolder.open();
+
+const waterFolder = gui.addFolder('Acqua');
+waterFolder.add(lightControls, 'ambiente', 0, 1).name('Luce diffusa');
+waterFolder.add(lightControls, 'densitaNebbia', 0, 0.06).name('Torbidità');
+waterFolder.open();
+
+function getLightDirection() {
+  const e = degToRad(lightControls.elevazione);
+  const a = degToRad(lightControls.azimut);
+  return [Math.cos(e) * Math.cos(a), Math.sin(e), Math.cos(e) * Math.sin(a)];
+}
+
+function scaleColor(color, k) {
+  return color.map(c => c * k);
+}
 
 let px, py, pz, facing;  // posizione e orientamento
 let mozzoElica, sterzo;  // stato interno
@@ -312,6 +361,7 @@ function doKeyDown(e) {
   if (e.keyCode == 38) { key[4] = true; e.preventDefault(); } // freccia su
   if (e.keyCode == 40) { key[5] = true; e.preventDefault(); } // freccia giu'
 }
+
 function doKeyUp(e) {
   if (e.keyCode == 87) key[0] = false; // W
   if (e.keyCode == 65) key[1] = false; // A
@@ -336,6 +386,12 @@ function resizeCanvasToDisplaySize() {
   return false;
 }
  
+function getUniforms(program, names) {
+  const locs = {};
+  for (const name of names) locs[name] = gl.getUniformLocation(program, name);
+  return locs;
+}
+
 async function main() {
   const [vertSource, fragSource, floorVertSource, floorFragSource, sandTexture] = await Promise.all([
     loadShaderSource('shaders/basic.vert.glsl'),
@@ -344,104 +400,121 @@ async function main() {
     loadShaderSource('shaders/seafloor.frag.glsl'),
     loadTexture('js/resources/images/color.jpg')
   ]);
- 
+
   const program = createProgram(vertSource, fragSource);
   const floorProgram = createProgram(floorVertSource, floorFragSource);
- 
+
   const sub = await loadObjMesh('models/sottomarino.obj');
   const prop = await loadObjMesh('models/elica.obj');
 
-  const floor = createGrid(50, 50, 10);
+  const floor = createGrid(300, 50, 60);
   const floorVAO = createFloorVAO(floor);
   const floorIndexCount = floor.indices.length;
   const floorModelMatrix = m4.translate(m4.identity(), 0, FLOOR_Y, 0);
- 
-  const floorUProjectionLoc = gl.getUniformLocation(floorProgram, 'uProjectionMatrix');
-  const floorUViewLoc = gl.getUniformLocation(floorProgram, 'uViewMatrix');
-  const floorUModelLoc = gl.getUniformLocation(floorProgram, 'uModelMatrix');
-  const floorUTextureLoc = gl.getUniformLocation(floorProgram, 'uSandTexture');
-  const floorUFogColorLoc = gl.getUniformLocation(floorProgram, 'uFogColor');
-  const floorUFogDensityLoc = gl.getUniformLocation(floorProgram, 'uFogDensity');
- 
-  const uProjectionLoc = gl.getUniformLocation(program, 'uProjectionMatrix');
-  const uViewLoc = gl.getUniformLocation(program, 'uViewMatrix');
-  const uModelLoc = gl.getUniformLocation(program, 'uModelMatrix');
-  const uColorLoc = gl.getUniformLocation(program, 'uColor');
- 
-  gl.clearColor(0.0, 0.15, 0.25, 1.0);
+  const floorNormalMatrix = m4.transpose(m4.inverse(floorModelMatrix)); 
+
+  const subU = getUniforms(program, [
+    'uProjectionMatrix', 'uViewMatrix', 'uModelMatrix', 'uNormalMatrix',
+    'uViewWorldPosition', 'uLightDirection', 'uLightColor', 'uAmbientColor',
+    'uDiffuseColor', 'uSpecularColor', 'uShininess', 'uFogColor', 'uFogDensity',
+  ]);
+  const floorU = getUniforms(floorProgram, [
+    'uProjectionMatrix', 'uViewMatrix', 'uModelMatrix', 'uNormalMatrix',
+    'uSandTexture', 'uLightDirection', 'uLightColor', 'uAmbientColor',
+    'uFogColor', 'uFogDensity',
+  ]);
+
+  gl.clearColor(...FOG_COLOR, 1.0); 
   gl.enable(gl.DEPTH_TEST);
 
   SubInit();
   SubSetLimits([sub, prop]);
 
+  function drawMesh(mesh, modelMatrix) {
+    gl.uniformMatrix4fv(subU.uModelMatrix, false, modelMatrix);
+    gl.uniformMatrix4fv(subU.uNormalMatrix, false, m4.transpose(m4.inverse(modelMatrix)));
+    gl.uniform3fv(subU.uDiffuseColor, mesh.material.diffuse);
+    gl.uniform3fv(subU.uSpecularColor, mesh.material.specular);
+    gl.uniform1f(subU.uShininess, mesh.material.shininess);
+    gl.bindVertexArray(mesh.vao);
+    gl.drawElements(gl.TRIANGLES, mesh.count, mesh.indexType, 0);
+  }
+
   let lastTime = 0;
   let accumulator = 0;
-  const deltaTimeFisica = 1/60; 
- 
+  const deltaTimeFisica = 1/60;
+
   function render(timeMs) {
     const currentTime = timeMs * 0.001;
     let frameTime = lastTime ? currentTime - lastTime : 0;
     lastTime = currentTime;
-    frameTime = Math.min(frameTime, 0.25); // evita "salti" al rientro da un'altra scheda
+    frameTime = Math.min(frameTime, 0.25); 
 
     accumulator += frameTime;
 
-    // Esegui la fisica a passi fissi
     while (accumulator >= deltaTimeFisica) {
       SubDoStep();
       accumulator -= deltaTimeFisica;
     }
- 
+
     if (resizeCanvasToDisplaySize()) {
       gl.viewport(0, 0, canvas.width, canvas.height);
     }
- 
+
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
- 
+
     const aspect = canvas.width / canvas.height;
-    const projectionMatrix = m4.perspective(degToRad(45), aspect, 0.1, 100);
- 
-    const cameraMatrix = m4.lookAt(getCameraPosition(), cameraTarget, cameraUp);
+    const projectionMatrix = m4.perspective(degToRad(45), aspect, 0.1, 250); 
+
+    const cameraPosition = getCameraPosition();
+    const cameraMatrix = m4.lookAt(cameraPosition, cameraTarget, cameraUp);
     const viewMatrix = m4.inverse(cameraMatrix);
- 
+
+    const lightDirection = getLightDirection();
+    const lightColor   = scaleColor(LIGHT_COLOR, lightControls.intensita);
+    const ambientColor = scaleColor(AMBIENT_COLOR, lightControls.ambiente);
+
     gl.useProgram(program);
-    gl.uniformMatrix4fv(uProjectionLoc, false, projectionMatrix);
-    gl.uniformMatrix4fv(uViewLoc, false, viewMatrix);
+    gl.uniformMatrix4fv(subU.uProjectionMatrix, false, projectionMatrix);
+    gl.uniformMatrix4fv(subU.uViewMatrix, false, viewMatrix);
+    gl.uniform3fv(subU.uViewWorldPosition, cameraPosition);
+    gl.uniform3fv(subU.uLightDirection, lightDirection);
+    gl.uniform3fv(subU.uLightColor, lightColor);
+    gl.uniform3fv(subU.uAmbientColor, ambientColor);
+    gl.uniform3fv(subU.uFogColor, FOG_COLOR);
+    gl.uniform1f(subU.uFogDensity, lightControls.densitaNebbia);
 
     let modelMatrix = m4.identity();
     modelMatrix = m4.translate(modelMatrix, px, py, pz);
     modelMatrix = m4.yRotate(modelMatrix, degToRad(facing));
-
-    gl.uniformMatrix4fv(uModelLoc, false, modelMatrix);
-    gl.uniform3fv(uColorLoc, [0.2, 0.6, 0.9]);
-    gl.bindVertexArray(sub.vao);
-    gl.drawElements(gl.TRIANGLES, sub.count, sub.indexType, 0);
+    drawMesh(sub, modelMatrix);
 
     const propModelMatrix = m4.zRotate(modelMatrix, degToRad(mozzoElica));
-    gl.uniformMatrix4fv(uModelLoc, false, propModelMatrix);
-    gl.uniform3fv(uColorLoc, [0.7, 0.55, 0.3]); 
-    gl.bindVertexArray(prop.vao);
-    gl.drawElements(gl.TRIANGLES, prop.count, prop.indexType, 0);
+    drawMesh(prop, propModelMatrix);
     gl.bindVertexArray(null);
 
     gl.useProgram(floorProgram);
-    gl.uniformMatrix4fv(floorUProjectionLoc, false, projectionMatrix);
-    gl.uniformMatrix4fv(floorUViewLoc, false, viewMatrix);
-    gl.uniformMatrix4fv(floorUModelLoc, false, floorModelMatrix);
- 
+    gl.uniformMatrix4fv(floorU.uProjectionMatrix, false, projectionMatrix);
+    gl.uniformMatrix4fv(floorU.uViewMatrix, false, viewMatrix);
+    gl.uniformMatrix4fv(floorU.uModelMatrix, false, floorModelMatrix);
+    gl.uniformMatrix4fv(floorU.uNormalMatrix, false, floorNormalMatrix);
+    gl.uniform3fv(floorU.uLightDirection, lightDirection);
+    gl.uniform3fv(floorU.uLightColor, lightColor);
+    gl.uniform3fv(floorU.uAmbientColor, ambientColor);
+    gl.uniform3fv(floorU.uFogColor, FOG_COLOR);
+    gl.uniform1f(floorU.uFogDensity, lightControls.densitaNebbia);
+
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, sandTexture);
-    gl.uniform1i(floorUTextureLoc, 0);
-    gl.uniform3fv(floorUFogColorLoc, [0.0, 0.15, 0.25]);
-    gl.uniform1f(floorUFogDensityLoc, 0.03);
- 
+    gl.uniform1i(floorU.uSandTexture, 0);
+
     gl.bindVertexArray(floorVAO);
     gl.drawElements(gl.TRIANGLES, floorIndexCount, gl.UNSIGNED_SHORT, 0);
     gl.bindVertexArray(null);
- 
+
     requestAnimationFrame(render);
   }
- 
+
   requestAnimationFrame(render);
 }
  
