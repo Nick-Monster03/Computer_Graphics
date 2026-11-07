@@ -61,6 +61,12 @@ function createVAO(mesh) {
   gl.bufferData(gl.ARRAY_BUFFER, mesh.normal, gl.STATIC_DRAW);
   gl.enableVertexAttribArray(ATTRIB_NORMAL);
   gl.vertexAttribPointer(ATTRIB_NORMAL, 3, gl.FLOAT, false, 0, 0);
+
+  const texBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, texBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, mesh.texcoord, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(ATTRIB_TEXCOORD);
+  gl.vertexAttribPointer(ATTRIB_TEXCOORD, 2, gl.FLOAT, false, 0, 0);
  
   const idxBuffer = gl.createBuffer();
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuffer);
@@ -129,7 +135,9 @@ async function loadObjMesh(url) {
   window.positions = [];
   window.normals = [];
   window.texcoords = [];
-  await LoadMesh(gl, { sourceMesh: url, noUnitize: true});
+  const meshInfo = { sourceMesh: url, noUnitize: true };
+  await LoadMesh(gl, meshInfo);
+  const texture = meshInfo.materials[1].parameter.get('map_Kd'); // load2mesh.js carica da solo la texture indicata da "map_Kd" nel .mtl
 
   const material = {
     diffuse:   window.diffuse,    // Kd
@@ -156,7 +164,8 @@ async function loadObjMesh(url) {
     indexType: IndexArray === Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
     min: bounds.min,   
     max: bounds.max,
-    material,         
+    material,
+    texture,         
   };
 }
 
@@ -170,6 +179,7 @@ function computeBounds(name, pos) {
       max[k] = Math.max(max[k], pos[i + k]);
     }
   }
+  //DEBUG:
   console.log(`${name}: ${pos.length / 3} vertici`,
     'min', min.map(v => v.toFixed(2)), 'max', max.map(v => v.toFixed(2)));
   return { min, max };
@@ -273,7 +283,8 @@ let key;
 const BOUND = 20;        
 const FLOOR_Y = -2;      
 const CEILING_Y = 10;    
-let pyMin, pyMax;        
+let pyMin, pyMax;
+let subBottom = 0;
 function SubInit() {
   px = py = pz = facing = 0; // posizione e orientamento
   mozzoElica = sterzo = 0;   // stato
@@ -300,6 +311,7 @@ function SubInit() {
 function SubSetLimits(meshes) {
   const minY = Math.min(...meshes.map(m => m.min[1]));
   const maxY = Math.max(...meshes.map(m => m.max[1]));
+  subBottom = minY;
   pyMin = FLOOR_Y - minY;
   pyMax = CEILING_Y - maxY;
   py = Math.max(py, pyMin);   
@@ -342,6 +354,7 @@ function SubDoStep() {
   py += vy;
   pz += vz;
 
+  SubCollideRocks();
 
   if (px >  BOUND) { px =  BOUND; vx = 0; }
   if (px < -BOUND) { px = -BOUND; vx = 0; }
@@ -349,6 +362,47 @@ function SubDoStep() {
   if (pz < -BOUND) { pz = -BOUND; vz = 0; }
   if (py < pyMin)  { py = pyMin;  vy = 0; } // non attraversa la sabbia
   if (py > pyMax)  { py = pyMax;  vy = 0; } // non esce verso l'alto
+}
+
+const ROCKS = [
+  { x:  13.0, z:  -9.0, scale: [3.6, 2.4, 2.8], rot:  35, tilt:   8 },
+  { x:  16.5, z:  -5.5, scale: [1.2, 1.0, 1.4], rot: 200, tilt:  -5 },
+  { x:  10.2, z: -12.5, scale: [0.9, 0.7, 1.0], rot:  80, tilt:  12 },
+  { x: -14.0, z:   3.0, scale: [2.2, 1.6, 2.6], rot: 120, tilt:  -6 },
+  { x:   6.0, z:  16.0, scale: [2.6, 1.3, 2.0], rot: 250, tilt:   4 },
+  { x:  -7.0, z:  15.0, scale: [1.4, 1.1, 1.2], rot: 300, tilt:  10 },
+];
+const ROCK_LIFT = 0.05;
+
+// collisione: rocce come cilindri verticali, sub come 3 cerchi lungo lo scafo
+const SUB_CIRCLES_Z = [-2.0, 0.8, 3.6];
+const SUB_RADIUS = 1.0;
+let obstacles = [];
+
+function SubCollideRocks() {
+  const sinf = Math.sin(degToRad(facing));
+  const cosf = Math.cos(degToRad(facing));
+  for (const rock of obstacles) {
+    if (py + subBottom > rock.top) continue;
+
+    for (const lz of SUB_CIRCLES_Z) {
+      const cx = px + lz * sinf;
+      const cz = pz + lz * cosf;
+      const dx = cx - rock.x;
+      const dz = cz - rock.z;
+      const dist = Math.hypot(dx, dz);
+      const minDist = SUB_RADIUS + rock.radius;
+      if (dist >= minDist || dist === 0) continue;
+
+      const nx = dx / dist, nz = dz / dist;
+      const push = minDist - dist;
+      px += nx * push;
+      pz += nz * push;
+
+      const vn = vx * nx + vz * nz;
+      if (vn < 0) { vx -= vn * nx; vz -= vn * nz; }
+    }
+  }
 }
 
 
@@ -406,6 +460,28 @@ async function main() {
 
   const sub = await loadObjMesh('models/sottomarino.obj');
   const prop = await loadObjMesh('models/elica.obj');
+  const rock = await loadObjMesh('models/roccia.obj');
+
+  // rocce ferme: matrici e ostacoli calcolati una volta sola
+  const rockRadius = Math.max(-rock.min[0], rock.max[0], -rock.min[2], rock.max[2]);
+  const rockModelMatrices = [];
+  obstacles = [];
+  for (const r of ROCKS) {
+    const [sx, sy, sz] = r.scale;
+    const y = FLOOR_Y + ROCK_LIFT * sy;
+    let m = m4.translate(m4.identity(), r.x, y, r.z);
+    m = m4.yRotate(m, degToRad(r.rot));
+    m = m4.xRotate(m, degToRad(r.tilt));
+    m = m4.scale(m, sx, sy, sz);
+    rockModelMatrices.push(m);
+
+    obstacles.push({
+      x: r.x,
+      z: r.z,
+      radius: rockRadius * Math.max(sx, sz) * 0.9,
+      top: y + rock.max[1] * sy,
+    });
+  }
 
   const floor = createGrid(300, 50, 60);
   const floorVAO = createFloorVAO(floor);
@@ -416,13 +492,17 @@ async function main() {
   const subU = getUniforms(program, [
     'uProjectionMatrix', 'uViewMatrix', 'uModelMatrix', 'uNormalMatrix',
     'uViewWorldPosition', 'uLightDirection', 'uLightColor', 'uAmbientColor',
-    'uDiffuseColor', 'uSpecularColor', 'uShininess', 'uFogColor', 'uFogDensity',
+    'uDiffuseColor', 'uSpecularColor', 'uShininess', 'uTexture', 'uFogColor', 'uFogDensity',
+    'uFloorY',
   ]);
   const floorU = getUniforms(floorProgram, [
     'uProjectionMatrix', 'uViewMatrix', 'uModelMatrix', 'uNormalMatrix',
     'uSandTexture', 'uLightDirection', 'uLightColor', 'uAmbientColor',
-    'uFogColor', 'uFogDensity',
+    'uFogColor', 'uFogDensity', 'uRocks', 'uRockCount',
   ]);
+
+  // rocce per l'ombra di contatto sulla sabbia: (x, z, raggio) in un unico array
+  const rockShadowData = new Float32Array(obstacles.flatMap(o => [o.x, o.z, o.radius / 0.9]));
 
   gl.clearColor(...FOG_COLOR, 1.0); 
   gl.enable(gl.DEPTH_TEST);
@@ -436,6 +516,9 @@ async function main() {
     gl.uniform3fv(subU.uDiffuseColor, mesh.material.diffuse);
     gl.uniform3fv(subU.uSpecularColor, mesh.material.specular);
     gl.uniform1f(subU.uShininess, mesh.material.shininess);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, mesh.texture);
+    gl.uniform1i(subU.uTexture, 0);
     gl.bindVertexArray(mesh.vao);
     gl.drawElements(gl.TRIANGLES, mesh.count, mesh.indexType, 0);
   }
@@ -483,6 +566,7 @@ async function main() {
     gl.uniform3fv(subU.uAmbientColor, ambientColor);
     gl.uniform3fv(subU.uFogColor, FOG_COLOR);
     gl.uniform1f(subU.uFogDensity, lightControls.densitaNebbia);
+    gl.uniform1f(subU.uFloorY, FLOOR_Y);
 
     let modelMatrix = m4.identity();
     modelMatrix = m4.translate(modelMatrix, px, py, pz);
@@ -491,6 +575,8 @@ async function main() {
 
     const propModelMatrix = m4.zRotate(modelMatrix, degToRad(mozzoElica));
     drawMesh(prop, propModelMatrix);
+
+    for (const m of rockModelMatrices) drawMesh(rock, m);
     gl.bindVertexArray(null);
 
     gl.useProgram(floorProgram);
@@ -503,6 +589,8 @@ async function main() {
     gl.uniform3fv(floorU.uAmbientColor, ambientColor);
     gl.uniform3fv(floorU.uFogColor, FOG_COLOR);
     gl.uniform1f(floorU.uFogDensity, lightControls.densitaNebbia);
+    gl.uniform3fv(floorU.uRocks, rockShadowData);
+    gl.uniform1i(floorU.uRockCount, obstacles.length);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, sandTexture);

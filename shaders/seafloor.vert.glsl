@@ -11,6 +11,7 @@ uniform mat4 uNormalMatrix;
 out vec2 vTexCoord;
 out vec3 vNormal;
 out vec3 vPositionEye;
+out vec2 vWorldXZ;                      
 
 void main() {
     vec4 worldPosition = uModelMatrix * vec4(aPosition, 1.0);
@@ -18,6 +19,7 @@ void main() {
     vTexCoord    = aTexCoord;
     vNormal      = mat3(uNormalMatrix) * aNormal;
     vPositionEye = (uViewMatrix * worldPosition).xyz;
+    vWorldXZ     = worldPosition.xz;    
 
     gl_Position = uProjectionMatrix * uViewMatrix * worldPosition;
 }
