@@ -22,3 +22,73 @@ html, body {
 #glCanvas:active {
   cursor: grabbing;
 }
+/* ---------- pannello di controllo 2D sopra la scena ---------- */
+#hudCanvas {
+  position: fixed;
+  left: 10px;
+  top: 10px;
+  z-index: 10;
+  pointer-events: none; /* mouse e dita passano attraverso e arrivano al canvas WebGL */
+}
+
+body.touch #hudCanvas {
+  top: 26px; /* lascia spazio alla barra del menu' chiuso */
+}
+
+/* telefoni in orizzontale: pannello piu' piccolo per non coprire i pulsanti di guida */
+@media (max-height: 400px) {
+  body.touch #hudCanvas {
+    transform: scale(0.8);
+    transform-origin: top left;
+  }
+}
+
+/* ---------- pulsanti di guida touch (visibili solo con body.touch) ---------- */
+#touchControls {
+  display: none;
+}
+
+body.touch #touchControls {
+  display: block;
+}
+
+.pad {
+  position: fixed;
+  z-index: 20;
+  bottom: 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.pad-left {
+  left: 16px;
+  grid-template-columns: repeat(3, 56px);
+  grid-template-rows: repeat(3, 56px);
+}
+
+.pad-left .up    { grid-column: 2; grid-row: 1; }
+.pad-left .left  { grid-column: 1; grid-row: 2; }
+.pad-left .right { grid-column: 3; grid-row: 2; }
+.pad-left .down  { grid-column: 2; grid-row: 3; }
+
+.pad-right {
+  right: 16px;
+  grid-template-columns: 76px;
+  grid-template-rows: repeat(2, 56px);
+}
+
+.tbtn {
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  border-radius: 12px;
+  background: rgba(0, 40, 64, 0.55);
+  color: #fff;
+  font: bold 16px sans-serif;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.tbtn.pressed {
+  background: rgba(64, 160, 220, 0.85);
+}

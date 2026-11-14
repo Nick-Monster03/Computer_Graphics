@@ -1,4 +1,5 @@
 import { createSphereVertices, createGrid } from './geometry.js';
+import { createHud } from './hud.js';
  
 const canvas = document.getElementById('glCanvas');
 const gl = canvas.getContext('webgl2');
@@ -18,32 +19,10 @@ async function loadShaderSource(url) {
   return res.text();
 }
  
-function compileShader(type, source) {
-  const shader = gl.createShader(type);
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const info = gl.getShaderInfoLog(shader);
-    gl.deleteShader(shader);
-    throw new Error(`Errore compilazione shader: ${info}`);
-  }
-  return shader;
-}
+
  
-function createProgram(vertSource, fragSource) {
-  const vertShader = compileShader(gl.VERTEX_SHADER, vertSource);
-  const fragShader = compileShader(gl.FRAGMENT_SHADER, fragSource);
- 
-  const program = gl.createProgram();
-  gl.attachShader(program, vertShader);
-  gl.attachShader(program, fragShader);
-  gl.linkProgram(program);
- 
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    const info = gl.getProgramInfoLog(program);
-    throw new Error(`Errore link programma: ${info}`);
-  }
-  return program;
+function shaderError(msg) {
+  throw new Error(msg);
 }
 
 function createVAO(mesh) {
@@ -216,16 +195,88 @@ window.addEventListener('mousemove', (e) => {
   lastX = e.clientX;
   lastY = e.clientY;
  
-  THETA -= dx * 0.005;
-  PHI -= dy * 0.005;
-  PHI = Math.min(MAX_PHI, Math.max(MIN_PHI, PHI));
+  rotateCamera(dx, dy);
 });
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  D += e.deltaY * 0.01;
-  D = Math.min(MAX_D, Math.max(MIN_D, D));
+  zoomCamera(e.deltaY * 0.01);
 }, { passive: false });
- 
+
+function rotateCamera(dx, dy) {
+  THETA -= dx * 0.005;
+  PHI -= dy * 0.005;
+  PHI = Math.min(MAX_PHI, Math.max(MIN_PHI, PHI));
+}
+
+function zoomCamera(delta) {
+  D += delta;
+  D = Math.min(MAX_D, Math.max(MIN_D, D));
+}
+
+// touch sulla camera: un dito ruota, due dita zoomano (struttura di trackball-rotator.js del prof)
+let touchStarted = false;
+let prevx, prevy;
+let prevPinch = 0;
+
+canvas.addEventListener("touchstart", doTouchStart, false);
+
+function pinchDistance(t) {
+  return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+}
+
+function doTouchStart(evt) {
+  evt.preventDefault();
+  const t = evt.targetTouches;
+  if (t.length == 1) {
+    prevx = t[0].clientX;
+    prevy = t[0].clientY;
+  } else if (t.length == 2) {
+    prevPinch = pinchDistance(t);
+  }
+  if (!touchStarted) {
+    canvas.addEventListener("touchmove", doTouchMove, false);
+    canvas.addEventListener("touchend", doTouchEnd, false);
+    canvas.addEventListener("touchcancel", doTouchCancel, false);
+    touchStarted = true;
+  }
+}
+
+function doTouchMove(evt) {
+  if (!touchStarted) return;
+  evt.preventDefault();
+  const t = evt.targetTouches;
+  if (t.length == 1) {
+    const x = t[0].clientX;
+    const y = t[0].clientY;
+    rotateCamera(x - prevx, y - prevy);
+    prevx = x;
+    prevy = y;
+  } else if (t.length == 2) {
+    const d = pinchDistance(t);
+    zoomCamera((prevPinch - d) * 0.05);
+    prevPinch = d;
+  }
+}
+
+function doTouchEnd(evt) {
+  const t = evt.targetTouches;
+  if (t.length == 0) {
+    doTouchCancel();
+  } else if (t.length == 1) {
+    prevx = t[0].clientX;
+    prevy = t[0].clientY;
+  }
+}
+
+function doTouchCancel() {
+  if (touchStarted) {
+    touchStarted = false;
+    canvas.removeEventListener("touchmove", doTouchMove, false);
+    canvas.removeEventListener("touchend", doTouchEnd, false);
+    canvas.removeEventListener("touchcancel", doTouchCancel, false);
+  }
+}
+
 function getCameraPosition() {
   return [
     D * Math.sin(PHI) * Math.cos(THETA),
@@ -249,7 +300,12 @@ const lightControls = {
 dat.GUI.TEXT_CLOSED = 'Nascondi pannello';
 dat.GUI.TEXT_OPEN   = 'Mostra pannello';
 
-const gui = new dat.GUI({ width: 320 });
+// dispositivo touch: pannello più stretto e chiuso all'avvio, pulsanti di guida visibili
+const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+if (isTouchDevice) document.body.classList.add('touch');
+
+const gui = new dat.GUI({ width: Math.min(320, window.innerWidth - 20) });
+if (isTouchDevice) gui.close();
 const lightFolder = gui.addFolder('Luce del sole');
 lightFolder.add(lightControls, 'elevazione', 5, 90).name('Altezza sull\'orizzonte (°)');
 lightFolder.add(lightControls, 'azimut', 0, 360).name('Direzione (°)');
@@ -260,6 +316,14 @@ const waterFolder = gui.addFolder('Acqua');
 waterFolder.add(lightControls, 'ambiente', 0, 1).name('Luce diffusa');
 waterFolder.add(lightControls, 'densitaNebbia', 0, 0.06).name('Torbidità');
 waterFolder.open();
+
+// pannello di controllo 2D: canvas sovrapposto alla scena, si mostra e nasconde dal menu'
+const hudCanvas = document.getElementById('hudCanvas');
+const drawHud = createHud(hudCanvas, isTouchDevice);
+const hudControls = { visibile: true };
+gui.add(hudControls, 'visibile').name('Pannello comandi').onChange((v) => {
+  hudCanvas.style.display = v ? 'block' : 'none';
+});
 
 function getLightDirection() {
   const e = degToRad(lightControls.elevazione);
@@ -427,6 +491,26 @@ function doKeyUp(e) {
 window.addEventListener('keydown', doKeyDown, true);
 window.addEventListener('keyup', doKeyUp, true);
 
+// pulsanti touch: ognuno accende e spegne lo stesso key[i] del tasto corrispondente
+for (const btn of document.querySelectorAll('#touchControls [data-key]')) {
+  const i = Number(btn.dataset.key);
+
+  function doButtonDown(evt) {
+    evt.preventDefault();
+    if (key) key[i] = true;
+    btn.classList.add('pressed');
+  }
+  function doButtonUp(evt) {
+    evt.preventDefault();
+    if (key) key[i] = false;
+    btn.classList.remove('pressed');
+  }
+
+  btn.addEventListener("touchstart", doButtonDown, false);
+  btn.addEventListener("touchend", doButtonUp, false);
+  btn.addEventListener("touchcancel", doButtonUp, false);
+}
+
  
 function resizeCanvasToDisplaySize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -455,8 +539,8 @@ async function main() {
     loadTexture('js/resources/images/color.jpg')
   ]);
 
-  const program = createProgram(vertSource, fragSource);
-  const floorProgram = createProgram(floorVertSource, floorFragSource);
+  const program = webglUtils.createProgramFromSources(gl, [vertSource, fragSource], null, null, shaderError);
+  const floorProgram = webglUtils.createProgramFromSources(gl, [floorVertSource, floorFragSource], null, null, shaderError);
 
   const sub = await loadObjMesh('models/sottomarino.obj');
   const prop = await loadObjMesh('models/elica.obj');
@@ -538,6 +622,16 @@ async function main() {
     while (accumulator >= deltaTimeFisica) {
       SubDoStep();
       accumulator -= deltaTimeFisica;
+    }
+
+    // pannello 2D: velocita', altezza dal fondo e rotta del sottomarino
+    if (hudControls.visibile) {
+      drawHud({
+        speed: Math.hypot(vx, vy, vz) / deltaTimeFisica,
+        maxSpeed: accMax * attritoZ / (1 - attritoZ) / deltaTimeFisica,
+        height: py - pyMin,
+        maxHeight: pyMax - pyMin,
+      });
     }
 
     if (resizeCanvasToDisplaySize()) {

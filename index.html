@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <META HTTP-EQUIV="Pragma" CONTENT="no-cache">
   <META HTTP-EQUIV="Cache-Control" CONTENT="no-cache">
   <title>Deep Dive - Progetto Computer Graphics</title>
@@ -10,6 +10,20 @@
 </head>
 <body>
   <canvas id="glCanvas"></canvas>
+  <canvas id="hudCanvas"></canvas>
+  <div id="touchControls">
+    <div class="pad pad-left">
+      <button class="tbtn up"    data-key="0">&#9650;</button>
+      <button class="tbtn left"  data-key="1">&#9664;</button>
+      <button class="tbtn right" data-key="3">&#9654;</button>
+      <button class="tbtn down"  data-key="2">&#9660;</button>
+    </div>
+    <div class="pad pad-right">
+      <button class="tbtn" data-key="4">Sali</button>
+      <button class="tbtn" data-key="5">Scendi</button>
+    </div>
+  </div>
+
   <script src="js/resources/m4.js"></script>
   <script src="js/resources/webgl-utils.js"></script>
   <script src="js/resources/mesh_utils.js"></script>
