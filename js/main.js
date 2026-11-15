@@ -1,4 +1,4 @@
-import { createSphereVertices, createGrid } from './geometry.js';
+import { createGrid } from './geometry.js';
 import { createHud } from './hud.js';
  
 const canvas = document.getElementById('glCanvas');
@@ -122,7 +122,8 @@ async function loadObjMesh(url) {
     specular:  window.specular,   // Ks
     shininess: window.shininess,  // Ns
   };
-  console.log(url, 'materiale', material);
+  //DEBUG
+  //console.log(url, 'materiale', material);
 
   const vertexCount = positions.length / 3;
   const IndexArray = vertexCount > 65535 ? Uint32Array : Uint16Array;
@@ -147,7 +148,7 @@ async function loadObjMesh(url) {
   };
 }
 
-// calcola (e stampa in console) il bounding box di una mesh
+// calcola il bounding box di una mesh
 function computeBounds(name, pos) {
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
@@ -158,8 +159,8 @@ function computeBounds(name, pos) {
     }
   }
   //DEBUG:
-  console.log(`${name}: ${pos.length / 3} vertici`,
-    'min', min.map(v => v.toFixed(2)), 'max', max.map(v => v.toFixed(2)));
+  //console.log(`${name}: ${pos.length / 3} vertici`,
+  //  'min', min.map(v => v.toFixed(2)), 'max', max.map(v => v.toFixed(2)));
   return { min, max };
 }
  
