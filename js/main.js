@@ -19,8 +19,7 @@ async function loadShaderSource(url) {
   return res.text();
 }
  
-
- 
+// errore di compilazione o di link degli shader: diventa un'eccezione, cosi' arriva all'alert in fondo al file
 function shaderError(msg) {
   throw new Error(msg);
 }
@@ -438,6 +437,8 @@ const ROCKS = [
 ];
 const ROCK_LIFT = 0.05;
 
+const PLAQUE = { x: 5, z: 3, rot: 50, tilt: -12, height: 2.6 };
+
 // collisione: rocce come cilindri verticali, sub come 3 cerchi lungo lo scafo
 const SUB_CIRCLES_Z = [-2.0, 0.8, 3.6];
 const SUB_RADIUS = 1.0;
@@ -567,6 +568,17 @@ async function main() {
     });
   }
 
+    // targa per la foto
+  const plaque = await loadObjMesh('models/targa.obj');
+  const plaqueScale = PLAQUE.height / (plaque.max[1] - plaque.min[1]);
+  let plaqueModelMatrix = m4.translate(m4.identity(), PLAQUE.x, FLOOR_Y - 0.1, PLAQUE.z);
+  plaqueModelMatrix = m4.yRotate(plaqueModelMatrix, degToRad(PLAQUE.rot));
+  plaqueModelMatrix = m4.xRotate(plaqueModelMatrix, degToRad(PLAQUE.tilt));
+  plaqueModelMatrix = m4.scale(plaqueModelMatrix, plaqueScale, plaqueScale, plaqueScale);
+  plaqueModelMatrix = m4.translate(plaqueModelMatrix, 0, -plaque.min[1], 0);
+  const plaqueRadius = 0.45 * (plaque.max[0] - plaque.min[0]) * plaqueScale;
+  obstacles.push({ x: PLAQUE.x, z: PLAQUE.z, radius: plaqueRadius, top: FLOOR_Y + PLAQUE.height });
+
   const floor = createGrid(300, 50, 60);
   const floorVAO = createFloorVAO(floor);
   const floorIndexCount = floor.indices.length;
@@ -624,7 +636,6 @@ async function main() {
       accumulator -= deltaTimeFisica;
     }
 
-    // pannello 2D: velocita', altezza dal fondo e rotta del sottomarino
     if (hudControls.visibile) {
       drawHud({
         speed: Math.hypot(vx, vy, vz) / deltaTimeFisica,
@@ -671,6 +682,7 @@ async function main() {
     drawMesh(prop, propModelMatrix);
 
     for (const m of rockModelMatrices) drawMesh(rock, m);
+    drawMesh(plaque, plaqueModelMatrix);
     gl.bindVertexArray(null);
 
     gl.useProgram(floorProgram);
