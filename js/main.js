@@ -1,5 +1,4 @@
 import { createGrid } from './geometry.js';
-import { createHud } from './hud.js';
  
 const canvas = document.getElementById('glCanvas');
 const gl = canvas.getContext('webgl2');
@@ -317,14 +316,6 @@ waterFolder.add(lightControls, 'ambiente', 0, 1).name('Luce diffusa');
 waterFolder.add(lightControls, 'densitaNebbia', 0, 0.06).name('Torbidità');
 waterFolder.open();
 
-// pannello di controllo 2D: canvas sovrapposto alla scena, si mostra e nasconde dal menu'
-const hudCanvas = document.getElementById('hudCanvas');
-const drawHud = createHud(hudCanvas, isTouchDevice);
-const hudControls = { visibile: true };
-gui.add(hudControls, 'visibile').name('Pannello comandi').onChange((v) => {
-  hudCanvas.style.display = v ? 'block' : 'none';
-});
-
 function getLightDirection() {
   const e = degToRad(lightControls.elevazione);
   const a = degToRad(lightControls.azimut);
@@ -635,15 +626,6 @@ async function main() {
     while (accumulator >= deltaTimeFisica) {
       SubDoStep();
       accumulator -= deltaTimeFisica;
-    }
-
-    if (hudControls.visibile) {
-      drawHud({
-        speed: Math.hypot(vx, vy, vz) / deltaTimeFisica,
-        maxSpeed: accMax * attritoZ / (1 - attritoZ) / deltaTimeFisica,
-        height: py - pyMin,
-        maxHeight: pyMax - pyMin,
-      });
     }
 
     if (resizeCanvasToDisplaySize()) {
